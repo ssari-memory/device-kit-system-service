@@ -28,7 +28,7 @@ const (
 	//in order to get a proper cpu usage at least we need to run this command twice (!NOT IN USE Right Now)
 	cpuUsage         = "top -b -n2 | grep Cpu"
 	dmidecodeVersion = "dmidecode --string system-product-name"
-	templogfileDir   = "/tmp"
+	templogfileDir   = "/var/log/journal"
 )
 
 // SystemInfo is a struct that provides System Info
@@ -225,40 +225,40 @@ func round(x, unit float64) float64 {
 }
 
 /*
-//****** DO NOT DELETE, THIS FUNCTION CAN BE USED IF cpu.Percent is not stable
+ //****** DO NOT DELETE, THIS FUNCTION CAN BE USED IF cpu.Percent is not stable
 
-func (s SystemInfo) findCpuUsage(content string) (float32, float32) {
-	//Get Cpu stats
-	if indexCall1 := strings.Index(content, "Cpu"); indexCall1 >= 0 {
-		//Content belongs to top command
-		//First result is not what we are looking for
-		content = content[indexCall1+len("Cpu"):]
+ func (s SystemInfo) findCpuUsage(content string) (float32, float32) {
+	 //Get Cpu stats
+	 if indexCall1 := strings.Index(content, "Cpu"); indexCall1 >= 0 {
+		 //Content belongs to top command
+		 //First result is not what we are looking for
+		 content = content[indexCall1+len("Cpu"):]
 
-		if indexCall2 := strings.Index(content, "Cpu"); indexCall2 >= 0 {
-			content = content[indexCall2+len("Cpu"):]
-			//Search for idle time
-			if indexId := strings.Index(content, "id"); indexId >= 0 {
+		 if indexCall2 := strings.Index(content, "Cpu"); indexCall2 >= 0 {
+			 content = content[indexCall2+len("Cpu"):]
+			 //Search for idle time
+			 if indexId := strings.Index(content, "id"); indexId >= 0 {
 
-				//Get from idle time
-				strFreeCpu := content[indexId-6 : indexId]
-				strFreeCpu = strings.TrimSpace(strFreeCpu)
-				strFreeCpu = strings.ReplaceAll(strFreeCpu, ",", ".")
+				 //Get from idle time
+				 strFreeCpu := content[indexId-6 : indexId]
+				 strFreeCpu = strings.TrimSpace(strFreeCpu)
+				 strFreeCpu = strings.ReplaceAll(strFreeCpu, ",", ".")
 
-				//Calculate the usage value
-				freeCpu, err := strconv.ParseFloat(strFreeCpu, 32)
-				if err != nil {
-					log.Println("findCpuUsage(): Error Occured during Parse! err:", err)
-					return 0, 0
-				}
-				usedCpu := 100 - float64(freeCpu)
-				return float32(round(usedCpu, 0.05)), float32(round(freeCpu, 0.05))
-			}
-		}
-	}
+				 //Calculate the usage value
+				 freeCpu, err := strconv.ParseFloat(strFreeCpu, 32)
+				 if err != nil {
+					 log.Println("findCpuUsage(): Error Occured during Parse! err:", err)
+					 return 0, 0
+				 }
+				 usedCpu := 100 - float64(freeCpu)
+				 return float32(round(usedCpu, 0.05)), float32(round(freeCpu, 0.05))
+			 }
+		 }
+	 }
 
-	log.Println("findCpuUsage(): Cannot find cpuUsage!")
-	return 0, 0
-}
+	 log.Println("findCpuUsage(): Cannot find cpuUsage!")
+	 return 0, 0
+ }
 */
 
 func (s SystemInfo) getCPUStats() (*systemapi.Cpu, error) {
@@ -329,10 +329,8 @@ func (s SystemInfo) getModelInfo(retval []cpu.InfoStat, modelInfo string) string
 	return modelInfo
 }
 
-// GetLogFile method returns the path of compressed log file with LogResponse struct
 func (s SystemInfo) GetLogFile(request *systemapi.LogRequest) (*systemapi.LogResponse, error) {
-
-	// Check whether given path exist or not if it doesn't exist then return.
+	// Check whether the given path exists; if it doesn't exist, then return.
 	pathCheckCommand := "[ -d " + strings.TrimSuffix(request.SaveFolderPath, "/") + " ]"
 	_, errCheck := s.util.Commander(pathCheckCommand)
 	if errCheck != nil {
@@ -340,72 +338,29 @@ func (s SystemInfo) GetLogFile(request *systemapi.LogRequest) (*systemapi.LogRes
 		return nil, errCheck
 	}
 
-	templogfileName := "logs" + "_" + time.Now().Format("20060102150405")
-	templogfilePath := templogfileDir + "/" + templogfileName
+	// Assuming the tar.xz file already exists in the specified path
+	tarXZFilePath := "/var/log/journal/sos_report.tar.xz"
 
-	// Get logs with the help of "journalctl" command
-	saveJournalCommand := "journalctl > " + templogfilePath
-	out, err := s.util.Commander(saveJournalCommand)
-	if err != nil {
-		log.Printf("Error  %s output : %s, error : %s",
-			saveJournalCommand,
-			strings.Trim(strings.TrimSuffix(string(out), "\n"), "\""), err.Error())
-		return nil, err
+	// Check if the tar.xz file exists
+	tarXZFileCheckCommand := "[ -f " + tarXZFilePath + " ]"
+	_, errFileCheck := s.util.Commander(tarXZFileCheckCommand)
+	if errFileCheck != nil {
+		log.Printf("Error %s file doesn't exist", tarXZFilePath)
+		return nil, errFileCheck
 	}
 
-	// Check,  if device.name file created  get deviceName, otherwise get device hostname
-	uniqIdentifierForLogFile := ""
-	deviceNameFile := "/var/device.name"
-	deviceNameCommand := "[ -f " + deviceNameFile + " ]"
-
-	_, errCheckDevName := s.util.Commander(deviceNameCommand)
-	if errCheckDevName != nil {
-		log.Println("Error  directory doesn't exist, device is not onboarded...")
-		// Device is not onboarded yet, get hostname from system.
-		hostnameCommand := "hostname"
-		outHost, errHost := s.util.Commander(hostnameCommand)
-		if errHost != nil {
-			log.Println("Hostname command run error, ", errHost.Error())
-		} else {
-			uniqIdentifierForLogFile = strings.TrimSuffix(string(outHost), "\n") + "_"
-		}
-
-	} else {
-		deviceNameCommand := "cat " + deviceNameFile
-		outDev, errDev := s.util.Commander(deviceNameCommand)
-		if errDev != nil {
-			log.Printf("Error while reading file : %s Error : %s \n", outDev, errDev.Error())
-		} else {
-			log.Println(" device.name file content :", string(outDev))
-			uniqIdentifierForLogFile = strings.TrimSpace(string(outDev)) + "_"
-		}
-	}
-
-	// If device name has `/`, it is not supported for file names, it will be replaced with `?`
-	uniqIdentifierForLogFile = strings.ReplaceAll(uniqIdentifierForLogFile, "/", "?")
-	// Single quotes also needs to be escaped since file name in zip creation command will be in between single quotes.
-	uniqIdentifierForLogFile = strings.ReplaceAll(uniqIdentifierForLogFile, "'", `\'`)
-
-	// create timestamp as "YYYYMMDDhhmmss" format
-	logIdentifier := strings.ReplaceAll(uniqIdentifierForLogFile, " ", "") + time.Now().Format("20060102150405")
-	logFileName := fmt.Sprintf("devicelogs_%s.tar.gz", logIdentifier)
-	log.Println("logName  :", logFileName)
-
+	// Create the final log file name
+	logFileName := fmt.Sprintf("devicelogs_%s.tar.xz", time.Now().Format("20060102150405"))
 	logFilePath := strings.TrimSuffix(request.SaveFolderPath, "/") + "/" + logFileName
-	//compress log file and create zip with the help of "tar"  command. Rename the file to "logs" in the archive.
-	zipCommand := fmt.Sprintf("tar -czvf $'%s' --transform='flags=r;s|%s|logs|' -C %s %s --remove-files",
-		logFilePath,
-		templogfileName,
-		templogfileDir,
-		templogfileName)
 
-	outZip, errZip := s.util.Commander(zipCommand)
-
-	if errZip != nil {
+	// Move the existing tar.xz file to the desired log file path
+	moveCommand := fmt.Sprintf("mv %s %s", tarXZFilePath, logFilePath)
+	_, errMove := s.util.Commander(moveCommand)
+	if errMove != nil {
 		log.Printf("Error %s output : %s, error : %s",
-			zipCommand,
-			strings.Trim(strings.TrimSuffix(string(outZip), "\n"), "\""), errZip.Error())
-		return nil, errZip
+			moveCommand,
+			strings.Trim(strings.TrimSuffix(string(errMove.Error()), "\n"), "\""), errMove.Error())
+		return nil, errMove
 	}
 
 	return &systemapi.LogResponse{LogPath: logFilePath}, nil
