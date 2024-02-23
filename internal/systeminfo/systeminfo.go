@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	systemapi "systemservice/api/siemens_iedge_dmapi_v1"
@@ -338,17 +340,43 @@ func (s SystemInfo) GetLogFile(request *systemapi.LogRequest) (*systemapi.LogRes
 		return nil, errCheck
 	}
 
-	// Assuming the tar.xz file already exists in the specified path
-	tarXZFilePath := "/var/log/journal/sos_report.tar.xz"
+	templogfilePath := templogfileDir + "/"
 
-	// Check if the tar.xz file exists
-	tarXZFileCheckCommand := "[ -f " + tarXZFilePath + " ]"
-	_, errFileCheck := s.util.Commander(tarXZFileCheckCommand)
-	if errFileCheck != nil {
-		log.Printf("Error %s file doesn't exist", tarXZFilePath)
-		return nil, errFileCheck
+	// Get logs with the help of "sos report" command
+	sosReportCommand := "sos report --batch --tmp-dir " + templogfilePath
+	out, err := s.util.Commander(sosReportCommand)
+	if err != nil {
+		log.Printf("Error %s output : %s, error : %s",
+			sosReportCommand,
+			strings.Trim(strings.TrimSuffix(string(out), "\n"), "\""), err.Error())
+		return nil, err
 	}
 
+	files, err := os.ReadDir(templogfilePath)
+	if err != nil {
+		fmt.Println("Error reading directory:", err)
+		return nil, err
+	}
+
+	re := regexp.MustCompile(`^sosreport-.+\.tar\.xz$`)
+
+	for _, file := range files {
+		filename := file.Name()
+		if re.MatchString(filename) {
+			newFilename := re.ReplaceAllString(filename, "sosreport.tar.xz")
+			fmt.Printf("Original: %s, New: %s\n", filename, newFilename)
+
+			oldPath := fmt.Sprintf("%s%s", templogfilePath, filename)
+			newPath := fmt.Sprintf("%s%s", templogfilePath, newFilename)
+			if err := os.Rename(oldPath, newPath); err != nil {
+				fmt.Printf("Error renaming file %s: %v\n", filename, err)
+			}
+		} else {
+			fmt.Printf("No match: %s\n", filename)
+		}
+	}
+
+	tarXZFilePath := "/var/log/journal/sosreport.tar.xz"
 	// Create the final log file name
 	logFileName := fmt.Sprintf("devicelogs_%s.tar.xz", time.Now().Format("20060102150405"))
 	logFilePath := strings.TrimSuffix(request.SaveFolderPath, "/") + "/" + logFileName
